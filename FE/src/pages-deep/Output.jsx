@@ -16,10 +16,41 @@ const Output = () => {
   const [error, setError] = useState(null);
   const [averagePrice, setAveragePrice] = useState(null);
   const [topSuggestions, setTopSuggestions] = useState([]);
-  const [mlPrediction, setMlPrediction] = useState(null); // State for ML prediction
+  const [mlPrediction, setMlPrediction] = useState(null);
 
   const calculateReasonabilityScore = (rating, reviews) => {
-    return Math.min(100, (rating * 20) + (reviews / 10));
+    let ratingScore = 0;
+    let reviewScore = 0;
+
+    // Parse rating
+    if (rating && rating !== "No rating" && rating !== "N/A" && rating !== null && rating !== undefined) {
+      if (typeof rating === 'string') {
+        const ratingMatch = rating.match(/(\d+\.?\d*)/);
+        ratingScore = ratingMatch ? parseFloat(ratingMatch[1]) : 0;
+      } else {
+        ratingScore = parseFloat(rating) || 0;
+      }
+      ratingScore = Math.max(0, Math.min(5, ratingScore));
+    }
+
+    // Parse reviews
+    if (reviews && reviews !== "No Reviews" && reviews !== "N/A" && reviews !== null && reviews !== undefined) {
+      if (typeof reviews === 'string') {
+        const reviewMatch = reviews.match(/(\d+)/);
+        reviewScore = reviewMatch ? parseInt(reviewMatch[1]) : 0;
+      } else {
+        reviewScore = parseInt(reviews) || 0;
+      }
+      reviewScore = Math.max(0, reviewScore);
+    }
+
+    const ratingContribution = (ratingScore / 5) * 70;
+    const reviewContribution = Math.min(30, reviewScore / 10);
+
+    const totalScore = ratingContribution + reviewContribution;
+    const finalScore = isNaN(totalScore) ? 0 : Math.max(0, Math.min(100, totalScore));
+
+    return Math.round(finalScore * 10) / 10;
   };
 
   const handleChange = (e) => {
@@ -37,7 +68,7 @@ const Output = () => {
     setData([]);
     setAveragePrice(null);
     setTopSuggestions([]);
-    setMlPrediction(null); // Reset ML prediction
+    setMlPrediction(null);
 
     try {
       const response = await fetch(`http://127.0.0.1:8000/scrape-make-model/${formData.category}`, {
@@ -57,20 +88,26 @@ const Output = () => {
       }
 
       const result = await response.json();
-      setData(result);
 
-      const prices = result.map(item => parseFloat(item.Price.replace(/[^0-9.-]+/g, "")));
-      const avgPrice = prices.reduce((acc, price) => acc + price, 0) / prices.length;
+      const prices = result.map(item => {
+        const priceStr = item.Price || '';
+        const match = priceStr.match(/[\d,.]+/g);
+        return match ? parseFloat(match.join('').replace(/,/g, '')) : 0;
+      });
+      const avgPrice = prices.length > 0 ? (prices.reduce((acc, p) => acc + p, 0) / prices.length) : 0;
       setAveragePrice(avgPrice.toFixed(2));
 
-      const scores = result.map((item, index) => ({
+      const dataWithScores = result.map(item => ({
         ...item,
-        reasonabilityScore: calculateReasonabilityScore(item.Rating, item.Reviews),
+        reasonabilityScore: calculateReasonabilityScore(item.Rating, item.Reviews)
       }));
-      const topThree = scores
-        .slice()
+
+      setData(dataWithScores);
+
+      const topThree = dataWithScores
         .sort((a, b) => b.reasonabilityScore - a.reasonabilityScore)
         .slice(0, 3);
+
       setTopSuggestions(topThree);
 
     } catch (err) {
@@ -80,16 +117,15 @@ const Output = () => {
     }
   };
 
-  // Use effect to trigger ML prediction when data is loaded
   useEffect(() => {
     if (data.length > 0) {
       const firstItem = data[0];
       setMlPrediction({
-        item_name: firstItem['Product Name'],
+        item_name: firstItem['Product Name'] || firstItem.service_provider || formData.itemName,
         category: formData.category,
-        specifications: {}, // or extract if available
-        seller: firstItem.Seller,
-        seller_rating: parseFloat(firstItem.Rating) || 4.0,
+        specifications: {},
+        seller: firstItem.Seller || firstItem.source || "Unknown",
+        seller_rating: parseFloat(firstItem.Rating || 4.0) || 4.0,
       });
     }
   }, [data]);
@@ -105,10 +141,67 @@ const Output = () => {
             <h2 className="text-2xl font-bold mb-4 text-center">Search by Make/Model</h2>
             <p className="mb-4 text-center">Find products based on make or model to streamline your procurement process.</p>
           </div>
+
+          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Input Fields here (same as before)... */}
-            {/* Dropdown, Item Name, Seller, Model */}
-            {/* Submit Button */}
+            <div>
+              <label className="block text-sm font-medium mb-1 text-white">Category</label>
+              <select
+                name="category"
+                value={formData.category}
+                onChange={handleChange}
+                className="w-full p-2 border rounded-md"
+              >
+                <option value="construction">Construction</option>
+                <option value="medical">Medical</option>
+                <option value="electronics">Electronics</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1 text-white">Item Name</label>
+              <input
+                type="text"
+                name="itemName"
+                value={formData.itemName}
+                onChange={handleChange}
+                className="w-full p-2 border rounded-md"
+                placeholder="Enter item name"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1 text-white">Seller (Optional)</label>
+              <input
+                type="text"
+                name="seller"
+                value={formData.seller}
+                onChange={handleChange}
+                className="w-full p-2 border rounded-md"
+                placeholder="Enter seller name"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1 text-white">Model (Optional)</label>
+              <input
+                type="text"
+                name="model"
+                value={formData.model}
+                onChange={handleChange}
+                className="w-full p-2 border rounded-md"
+                placeholder="Enter model"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-2 px-4 rounded-md"
+            >
+              {loading ? 'Searching...' : 'Search Products'}
+            </button>
           </form>
 
           {loading && <p className="mt-4 text-white">Loading...</p>}
@@ -117,6 +210,7 @@ const Output = () => {
           {data.length > 0 && (
             <div className="mt-8">
               <h3 className="text-3xl font-semibold mb-4 text-white text-center">Results</h3>
+
               {averagePrice && (
                 <div className="mt-4 p-4 bg-green-100 text-green-800 rounded-md">
                   <p>Estimated Price: ₹{averagePrice}</p>
@@ -129,7 +223,9 @@ const Output = () => {
                   <ul className="space-y-2">
                     {topSuggestions.map((item, index) => (
                       <li key={index} className="flex justify-between">
-                        <a href={item.Website} target="_blank" rel="noopener noreferrer"><span>{item['Product Name']}</span></a>
+                        <a href={item.Website} target="_blank" rel="noopener noreferrer">
+                          <span>{item['Product Name']}</span>
+                        </a>
                         <span>Score: {item.reasonabilityScore}</span>
                       </li>
                     ))}
@@ -137,7 +233,6 @@ const Output = () => {
                 </div>
               )}
 
-              {/* ML Prediction Component */}
               {mlPrediction && (
                 <div className="mt-6">
                   <MLPrediction
@@ -149,7 +244,6 @@ const Output = () => {
                 </div>
               )}
 
-              {/* Data Table */}
               <div className="overflow-x-auto rounded-md">
                 <table className="min-w-full bg-white border">
                   <thead>
@@ -169,17 +263,24 @@ const Output = () => {
                       <tr key={index} className="hover:bg-gray-100">
                         <td className="py-2 px-4 border-b">{item['Product Name']}</td>
                         <td className="py-2 px-4 border-b">{item.specifications}</td>
-                        <td className="py-2 px-4 border-b"><a href={item.Website} target="_blank" rel="noopener noreferrer">{item.Seller}</a></td>
+                        <td className="py-2 px-4 border-b">
+                          <a href={item.Website} target="_blank" rel="noopener noreferrer">{item.Seller}</a>
+                        </td>
                         <td className="py-2 px-4 border-b">{item.Price}</td>
                         <td className="py-2 px-4 border-b">{item.last_updated}</td>
                         <td className="py-2 px-4 border-b">{item.Rating}</td>
                         <td className="py-2 px-4 border-b">{item.Reviews}</td>
-                        <td className="py-2 px-4 border-b">{calculateReasonabilityScore(item.Rating, item.Reviews)}</td>
+                        <td className="py-2 px-4 border-b">
+                          {isNaN(calculateReasonabilityScore(item.Rating, item.Reviews))
+                            ? 'N/A'
+                            : calculateReasonabilityScore(item.Rating, item.Reviews).toFixed(1)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+
             </div>
           )}
         </div>
